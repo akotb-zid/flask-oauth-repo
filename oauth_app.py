@@ -1,86 +1,81 @@
-# app.py
-from flask import Flask, redirect, request, jsonify, render_template_string, session
-import requests
+from flask import Flask, redirect, request, jsonify
 from urllib.parse import urlencode
-import json  # <- needed for json.dumps
+import requests
+
+# SETUP CHECKLIST:
+# [ ] Register app in Zid Partner Dashboard
+# [ ] Copy Client ID and Secret into this file
+# [ ] Start ngrok: ngrok http 5000
+# [ ] Paste the HTTPS ngrok URL into NGROK_URL below (no trailing slash!)
+# [ ] In Partner Dashboard, 
+# [ ] set Callback URL to: {NGROK_URL}/zid/callback -> https://unemotive-susanne-unscanned.ngrok-free.dev/zid/callback
+# [ ] set Redirection URL to: {NGROK_URL}/zid/redirect -> https://unemotive-susanne-unscanned.ngrok-free.dev/zid/redirect
+# [ ] Run: python app.py
+
+
 
 app = Flask(__name__)
-app.secret_key = 'supersecretkey'
 
-# === Zid OAuth Configuration ===
-CLIENT_ID = 00000  # Add your actual client ID as INTEGER
-CLIENT_SECRET = 'CLIENT_SECRET'  # Add your actual client secret as STRING
-REDIRECT_URI = 'NGROK_URL/zid/callback' # Callback url from the ngrok
+# === Zid OAuth Config ===
+# IMPORTANT: redirect_uri must match the callback URL in Partner Dashboard EXACTLY 
+# (including protocol, domain, path, and trailing slashes)
+
+
+# Configruable
+NGROK_URL = 'ADD_HERE' # Example https://unemotive-susanne-unscanned.ngrok-free.dev
+CLIENT_ID = 0000
+CLIENT_SECRET = 'YOUR_CLIENT_Secret'
+
+
+
+# Keep without changing
+REDIRECT_URI = f'{NGROK_URL}/zid/callback'
 AUTH_URL = 'https://oauth.zid.sa/oauth/authorize'
 TOKEN_URL = 'https://oauth.zid.sa/oauth/token'
 
-# Temporary storage for token (for demo; use DB in production)
-store_tokens = {}
+# Temporary token storage (replace with DB in production)
+tokens = {}
 
 
 @app.route('/')
 def home():
-    token_data = store_tokens.get('token_data')
-    if token_data:
-        return jsonify(token_data)
-    return jsonify({'message': 'Welcome!'})
+    return {
+        'redirect_url': f'https://{request.host}/zid/redirect',
+        'callback_url': f'https://{request.host}/zid/callback'
+    }
 
 
-# Redirect route
 @app.route('/zid/redirect')
-def zid_oauth_redirect():
-    """Redirect merchant to Zid OAuth authorization page"""
-    params = {
+def zid_auth():
+    """Step 1: Redirect merchant to Zid authorization page"""
+    return redirect(f"{AUTH_URL}?{urlencode({
         'client_id': CLIENT_ID,
         'redirect_uri': REDIRECT_URI,
-        'response_type': 'code',
-    }
-    url = f"{AUTH_URL}?{urlencode(params)}"
-    print("Redirecting to Zid OAuth URL:", url)
-    return redirect(url)
+        'response_type': 'code'
+    })}")
 
-# Callback route
+
 @app.route('/zid/callback')
-def zid_oauth_callback():
-    """Receive authorization code and exchange it for tokens"""
+def zid_callback():
+    """Step 2: Exchange authorization code for access token"""
     code = request.args.get('code')
     if not code:
-        return "Authorization code not found", 400
+        return jsonify(error='Authorization code missing'), 400
 
-    payload = {
+    resp = requests.post(TOKEN_URL, data={
         'grant_type': 'authorization_code',
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
         'redirect_uri': REDIRECT_URI,
-        'code': code,
-    }
+        'code': code
+    })
 
-    response = requests.post(TOKEN_URL, data=payload)
-    if not response.ok:
-        return jsonify({
-            'error': 'Token request failed',
-            'status_code': response.status_code,
-            'response': response.text
-        }), 400
+    if not resp.ok:
+        return jsonify(error='Token request failed', details=resp.text), resp.status_code
 
-    token_data = response.json()  # <- this is inside the function
-    store_tokens['token_data'] = token_data  # Save to temp storage
-    session['token_data'] = token_data       # Save to user session
+    tokens['data'] = resp.json()
+    return jsonify(tokens['data'])
 
-    # Pretty print JSON for display
-    pretty_json = json.dumps(token_data, indent=4)
-
-    html_content = f"""
-    <html>
-        <head><title>Zid OAuth Success</title></head>
-        <body>
-            <h2>Zid OAuth Authorized Successfully!</h2>
-            <pre>{pretty_json}</pre>
-            <a href="/">Go Home</a>
-        </body>
-    </html>
-    """
-    return render_template_string(html_content)
 
 if __name__ == '__main__':
     app.run(debug=True)
